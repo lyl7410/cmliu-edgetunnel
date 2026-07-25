@@ -17,7 +17,7 @@ jobs:
     steps:
       # Step 1: run a standard checkout action
       - name: Checkout target repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       # Step 2: run the sync action
       - name: Sync upstream changes
@@ -27,14 +27,24 @@ jobs:
           upstream_sync_repo: cmliu/edgetunnel
           upstream_sync_branch: main
           target_sync_branch: main
-          target_repo_token: ${{ secrets.GITHUB_TOKEN }} # automatically generated, no need to set
-
-          # Set test_mode true to run tests instead of the true action!!
+          target_repo_token: ${{ secrets.GITHUB_TOKEN }}
           test_mode: false
+
+      # Step 3: 自动还原你的专属 wrangler.toml 配置，防止被上游覆盖
+      - name: Restore custom wrangler.toml
+        run: |
+          cat << 'EOF' > wrangler.toml
+          name = "c-m-jiedian"
+          main = "_worker.js"
+          compatibility_date = "2025-11-04"
+          keep_vars = true
+
+          [[kv_namespaces]]
+          binding = "KV"
+          id = "08f420781e7649abb7e7b95429124c5e"
 
       - name: Sync check
         if: failure()
         run: |
           echo "[Error] 由于上游仓库的 workflow 文件变更，导致 GitHub 自动暂停了本次自动更新，你需要手动 Sync Fork 一次，详细教程请查看项目README.md "
-          echo "[Error] Due to a change in the workflow file of the upstream repository, GitHub has automatically suspended the scheduled automatic update. You need to manually sync your fork. Please refer to the project README.md for instructions. "
           exit 1
