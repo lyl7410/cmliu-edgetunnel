@@ -2,11 +2,10 @@ name: Upstream Sync
 
 permissions:
   contents: write
-  workflows: write   # 确保工作流自身更新时有写入权限
 
 on:
   schedule:
-    - cron: "0 0 * * *"   # 每天定时检查上游（如果发现没更新会直接退出，删89行去掉每天定时检查）
+    - cron: "0 0 * * *"   # 每天检查一次是否有新版本（如果发现没更新会直接退出，删78行去掉每天定时检查）
   workflow_dispatch:       # 随时支持手动在 Actions 页面点击一键检查/更新
 
 jobs:
@@ -30,30 +29,32 @@ jobs:
           git config user.name "GH Action - Upstream Sync"
           git config user.email "action@github.com"
 
-          # 1. 连接上游仓库并获取最新分支状态
+          # 1. 连接上游并获取最新状态
           git remote add upstream https://github.com/cmliu/edgetunnel.git || true
           git fetch upstream main
 
           UPSTREAM_SHA=$(git rev-parse upstream/main)
 
-          # 2. 核心比对：判断上游最新的提交是否已经包含在当前分支中
+          # 2. 判断上游是否有新版本（若无新提交则静默退出，不产生多余构建）
           if git merge-base --is-ancestor "$UPSTREAM_SHA" HEAD; then
             echo "================================================="
-            echo "上游仓库暂无新版本发布，已是最新状态，跳过同步。"
+            echo "上游仓库暂无新版本，已是最新状态，跳过同步。"
             echo "No new updates from upstream repository. Skipping."
             echo "================================================="
             exit 0
           fi
 
           echo "================================================="
-          echo "检测到上游有新版本发布，开始同步并应用个人专属配置..."
-          echo "New upstream commits detected! Syncing now..."
+          echo "检测到上游有新版本发布，开始同步并应用个人配置..."
           echo "================================================="
 
           # 3. 对齐上游最新代码
           git reset --hard upstream/main
 
-          # 4. 自动写入您的专属 wrangler.toml
+          # 4. 关键技巧：保持本地 sync.yml 不变，彻底免疫 GitHub 工作流拦截
+          git checkout ORIG_HEAD -- .github/workflows/sync.yml || true
+
+          # 5. 自动写入您的专属 wrangler.toml
           cat << EOF > wrangler.toml
           name = "${MY_NAME}"
           main = "_worker.js"
@@ -65,7 +66,7 @@ jobs:
           id = "${MY_KV_ID}"
           EOF
 
-          # 5. 提交变更并推送到仓库（触发 Cloudflare 部署新版）
-          git add wrangler.toml
-          git commit -m "chore(sync): 同步上游新版本并应用个人配置 [${UPSTREAM_SHA:0:7}]" || true
+          # 6. 提交并同步到仓库
+          git add wrangler.toml .github/workflows/sync.yml
+          git commit -m "chore(sync): 同步上游新版本并保留专属配置 [${UPSTREAM_SHA:0:7}]" || true
           git push --force origin main
