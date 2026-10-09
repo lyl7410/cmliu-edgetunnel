@@ -5,8 +5,8 @@ permissions:
 
 on:
   schedule:
-    - cron: "0 0 * * *" # every day
-  workflow_dispatch:
+    - cron: "0 0 * * *"   # 每天检查一次是否有新版本（如果发现没更新会直接退出，删78行去掉每天定时检查）
+  workflow_dispatch:       # 随时支持手动在 Actions 页面点击一键检查/更新
 
 jobs:
   sync_latest_from_upstream:
@@ -21,24 +21,52 @@ jobs:
           fetch-depth: 0
           ref: main
 
-      - name: Sync upstream changes
+      - name: Check and Sync if upstream has new updates
+        env:
+          MY_NAME: ${{ vars.WORKER_NAME || 'c-m-jiedian' }}
+          MY_KV_ID: ${{ vars.WORKER_KV_ID || '08f420781e7649abb7e7b95429124c5e' }}
         run: |
           git config user.name "GH Action - Upstream Sync"
           git config user.email "action@github.com"
 
-          git remote add upstream https://github.com/cmliu/edgetunnel.git
+          # 1. 连接上游并获取最新状态
+          git remote add upstream https://github.com/cmliu/edgetunnel.git || true
           git fetch upstream main
 
-          if git diff --quiet HEAD upstream/main; then
-            # 内容和上游一致，直接对齐，顺带清理历史分叉留下的多余 merge commit
-            git reset --hard upstream/main
-            git push --force-with-lease origin main
-          else
-            # 有本地修改，保持原来的合并方式，不覆盖任何人的改动
-            if ! git pull --no-rebase upstream main; then
-              echo "[Error] 合并上游变更产生冲突，自动同步已暂停，请手动 Sync Fork 并解决冲突。"
-              echo "[Error] Merge conflict detected while syncing upstream. Please sync your fork manually and resolve the conflicts."
-              exit 1
-            fi
-            git push origin main
+          UPSTREAM_SHA=$(git rev-parse upstream/main)
+
+          # 2. 判断上游是否有新版本（若无新提交则静默退出，不产生多余构建）
+          if git merge-base --is-ancestor "$UPSTREAM_SHA" HEAD; then
+            echo "================================================="
+            echo "上游仓库暂无新版本，已是最新状态，跳过同步。"
+            echo "No new updates from upstream repository. Skipping."
+            echo "================================================="
+            exit 0
           fi
+
+          echo "================================================="
+          echo "检测到上游有新版本发布，开始同步并应用个人配置..."
+          echo "================================================="
+
+          # 3. 对齐上游最新代码
+          git reset --hard upstream/main
+
+          # 4. 关键技巧：保持本地 sync.yml 不变，彻底免疫 GitHub 工作流拦截
+          git checkout ORIG_HEAD -- .github/workflows/sync.yml || true
+
+          # 5. 自动写入您的专属 wrangler.toml
+          cat << EOF > wrangler.toml
+          name = "${MY_NAME}"
+          main = "_worker.js"
+          compatibility_date = "2025-11-04"
+          keep_vars = true
+
+          [[kv_namespaces]]
+          binding = "KV"
+          id = "${MY_KV_ID}"
+          EOF
+
+          # 6. 提交并同步到仓库
+          git add wrangler.toml .github/workflows/sync.yml
+          git commit -m "chore(sync): 同步上游新版本并保留专属配置 [${UPSTREAM_SHA:0:7}]" || true
+          git push --force origin main
